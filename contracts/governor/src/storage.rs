@@ -142,9 +142,9 @@ pub enum DataKey {
     ProposalVoteSnapshot(u64),
     /// Receipt recording the voting weight cast by `(proposal_id, voter)` to prevent double-voting.
     VoterReceipt(u64, Address),
-}
     /// Minimum voting period in ledger sequences (~1 day = 17280 ledgers) (Issue #772).
     VotingPeriodLedgers,
+}
 
 /// Records a token balance checkpoint for `account` at the current ledger sequence.
 pub fn record_checkpoint(env: &Env, account: &Address, weight: u64) {
