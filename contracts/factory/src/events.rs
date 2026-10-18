@@ -60,6 +60,20 @@ pub fn protocol_fee_charged(env: &Env, fee_recipient: &Address, fee: i128) {
         .publish((symbol_short!("fee"), fee_recipient.clone()), fee);
 }
 
+/// Protocol fee collection event (Issue #769).
+///
+/// Emitted when protocol fees are collected and routed to the recipient.
+/// Allows indexers to track fee accumulation without scanning balance changes.
+///
+/// Topics: `("pfee_collected", recipient)` — the address that received the collected fee.
+/// Data:   `(token, amount)` — the token address and amount collected (in stroops).
+pub fn protocol_fee_collected(env: &Env, token: &Address, recipient: &Address, amount: i128) {
+    env.events().publish(
+        (symbol_short!("pfee_collected"), recipient.clone()),
+        (token.clone(), amount),
+    );
+}
+
 /// StreamCreated event payload metadata (Issue #684).
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

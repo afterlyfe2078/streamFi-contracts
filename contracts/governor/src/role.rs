@@ -150,6 +150,15 @@ pub fn require_role_or_admin(env: &Env, caller: &Address, role: Role) -> Result<
     .map_err(|_| Error::NotAuthorized)
 }
 
+/// Require that `caller` authorized the transaction and holds `Pauser` **or** `Admin` role.
+/// Emergency responders (pausers) can execute pause/unpause operations (Issue #771).
+/// This separates regular parameter tuning from emergency pause authority.
+///
+/// Bumps instance TTL on success.
+pub fn require_emergency_responder(env: &Env, caller: &Address) -> Result<(), Error> {
+    require_role_or_admin(env, caller, Role::Pauser)
+}
+
 /// Propose transferring the admin role to a new address (step 1 of 2) (Issue #682).
 pub fn propose_admin(env: &Env, proposer: &Address, new_admin: &Address) -> Result<(), Error> {
     require_role(env, proposer, Role::Admin)?;

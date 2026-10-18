@@ -63,4 +63,7 @@ pub enum Error {
     InvalidGovernor = 31,
     /// The salt used for deploying the stream contract has already been used.
     SaltAlreadyUsed = 32,
+    /// Invalid factory initialization parameters (Issue #770).
+    /// Indicates misconfigured factory setup (e.g., invalid fee recipient, bounds).
+    InvalidFactoryConfiguration = 20,
 }
