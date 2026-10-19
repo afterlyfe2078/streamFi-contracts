@@ -19,7 +19,6 @@ pub const MAX_BATCH_SIZE: u32 = 30;
 /// Maximum batch limit alias for MAX_BATCH_SIZE (Issue #677).
 pub const MAX_BATCH_LIMIT: u32 = MAX_BATCH_SIZE;
 
-
 /// Behaviour version of this deployment.
 ///
 /// Bump this whenever `process_batch` (or any other entry point) changes
@@ -87,7 +86,6 @@ pub enum Error {
     /// Another batch execution or reentrant call is already in progress.
     ReentrancyForbidden = 10,
 }
-
 
 /// Individual execution status for an item in a batch execution (Issue #697).
 #[contracttype]
@@ -324,7 +322,6 @@ impl BatchTransferProcessor {
     ///
     /// # Returns
     /// The total number of tokens transferred on success.
-
     /// Executes a batch transfer and returns per-item execution status codes (Issue #697).
     pub fn process_batch_detailed(
         env: Env,

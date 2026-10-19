@@ -621,4 +621,3 @@ fn test_max_batch_size_limit_is_thirty() {
     assert_eq!(crate::MAX_BATCH_LIMIT, 30);
     assert_eq!(crate::MAX_BATCH_SIZE, 30);
 }
-

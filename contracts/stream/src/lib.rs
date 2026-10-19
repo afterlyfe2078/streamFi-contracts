@@ -9,13 +9,21 @@ pub mod storage;
 mod tests;
 mod ttl;
 
-use soroban_sdk::{contract, contractimpl, panic_with_error, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, panic_with_error, token, Address, Env, String};
 
 use drip_common::{is_zero_address, pause};
 
 pub use errors::Error;
 pub use storage::{CliffConfig, SplitConfig, StreamConfig, StreamStatus, StreamSummary};
-use storage::{DataKey, RateCheckpoint, StreamInfo, FLAG_CLAWBACK_ENABLED, FLAG_PAUSED};
+use storage::{
+    DataKey, RateCheckpoint, StreamInfo, FLAG_CLAWBACK_ENABLED, FLAG_PAUSED, FLAG_REGULATED_ASSET,
+};
+
+/// Minimum duration for a bounded stream, in seconds (#847).
+pub const MIN_STREAM_DURATION: u64 = 60;
+
+/// Maximum byte length of the optional human-readable description (#845).
+pub const MAX_DESCRIPTION_LEN: u32 = 128;
 
 #[contract]
 pub struct DripStream;
@@ -90,6 +98,8 @@ impl DripStream {
         end_time: u64,
         clawback_enabled: bool,
         force_cancel_pause_secs: u64,
+        is_regulated_asset: bool,
+        description: Option<String>,
     ) {
         if env.storage().instance().has(&DataKey::Config) {
             panic_with_error!(&env, Error::AlreadyInitialized);
@@ -139,6 +149,20 @@ impl DripStream {
             panic_with_error!(&env, Error::InvalidTimeRange);
         }
 
+        // A stream that lasts only a second or two makes the rate math
+        // degenerate (truncation to zero for realistic rates). Require a
+        // meaningful minimum for bounded streams (#847). Open-ended streams
+        // use `end_time == 0` as a sentinel and are unaffected.
+        if end_time > 0 && end_time - start_time < MIN_STREAM_DURATION {
+            panic_with_error!(&env, Error::StreamDurationTooShort);
+        }
+
+        if let Some(ref desc) = description {
+            if desc.len() > MAX_DESCRIPTION_LEN {
+                panic_with_error!(&env, Error::DescriptionTooLong);
+            }
+        }
+
         // A bounded stream must not overflow its total obligation up front.
         // Once enough time elapses, `streamed_amount` multiplies `rate_per_second`
         // by `elapsed` and would otherwise return `ArithmeticOverflow` in
@@ -161,14 +185,20 @@ impl DripStream {
             panic_with_error!(&env, Error::BackdatedStream);
         }
 
-        ttl::bump(&env);
+        ttl::bump_for_remaining(&env, end_time.saturating_sub(now));
 
         let mut flags: u32 = 0;
         if clawback_enabled {
             flags |= FLAG_CLAWBACK_ENABLED;
         }
+        if is_regulated_asset {
+            flags |= FLAG_REGULATED_ASSET;
+        }
 
         let s = env.storage().instance();
+        if let Some(desc) = description {
+            s.set(&DataKey::StreamDescription, &desc);
+        }
         s.set(&DataKey::StorageVersion, &storage::CURRENT_STORAGE_VERSION);
         s.set(
             &DataKey::ForceCancelPauseThresholdSecs,
@@ -203,6 +233,7 @@ impl DripStream {
                 withdrawn: 0,
                 paused_at: 0,
                 event_sequence: 0,
+                cumulative_fees: 0,
             },
         );
 
@@ -334,8 +365,13 @@ impl DripStream {
         }
 
         // Emit stream_completed event on final withdrawal when remaining balance reaches zero (Issue #676)
-        if remaining == 0 && (info.end_time > 0 || balance > 0) && !env.storage().instance().has(&DataKey::StreamCompleted) {
-            env.storage().instance().set(&DataKey::StreamCompleted, &true);
+        if remaining == 0
+            && (info.end_time > 0 || balance > 0)
+            && !env.storage().instance().has(&DataKey::StreamCompleted)
+        {
+            env.storage()
+                .instance()
+                .set(&DataKey::StreamCompleted, &true);
             events::stream_completed(env, &info.recipient, new_withdrawn);
         }
 
@@ -362,8 +398,7 @@ impl DripStream {
         let info = state::load(env);
         state::assert_not_cancelled(&info)?;
 
-        let cfg_opt: Option<StreamConfig> =
-            env.storage().instance().get(&DataKey::StreamConfig);
+        let cfg_opt: Option<StreamConfig> = env.storage().instance().get(&DataKey::StreamConfig);
         if let Some(cfg) = cfg_opt {
             if !cfg.is_cancelable {
                 return Err(Error::StreamNotCancelable);
@@ -432,12 +467,17 @@ impl DripStream {
             tk.transfer(&contract_addr, &info.sender, &refund_to_sender);
         }
 
-        events::cancelled(env, &info.sender, refund_to_sender, total_withdrawn, refund_to_sender);
+        events::cancelled(
+            env,
+            &info.sender,
+            refund_to_sender,
+            total_withdrawn,
+            refund_to_sender,
+        );
         Ok(())
     }
 
     /// Sender or delegated operator pauses the stream.
-
     /// Read-only: whether the stream is under an emergency administrative freeze (Issue #699).
     pub fn is_emergency_paused(env: Env) -> bool {
         drip_common::pause::is_paused(&env, &DataKey::EmergencyPaused)
@@ -450,7 +490,7 @@ impl DripStream {
             return Err(Error::AlreadyPaused);
         }
         ttl::bump(&env);
-        drip_common::pause::set_paused(&env, &DataKey::EmergencyPaused, true);
+        let _ = drip_common::pause::set_paused(&env, &DataKey::EmergencyPaused, true);
         events::emergency_paused(&env, &caller, env.ledger().timestamp());
         Ok(())
     }
@@ -462,7 +502,7 @@ impl DripStream {
             return Err(Error::NotPaused);
         }
         ttl::bump(&env);
-        drip_common::pause::set_paused(&env, &DataKey::EmergencyPaused, false);
+        let _ = drip_common::pause::set_paused(&env, &DataKey::EmergencyPaused, false);
         events::emergency_unpaused(&env, &caller, env.ledger().timestamp());
         Ok(())
     }
@@ -574,6 +614,9 @@ impl DripStream {
                 .ok_or(Error::ArithmeticOverflow)?;
         }
         state::save(env, &updated);
+        if updated.end_time > 0 {
+            ttl::bump_for_remaining(env, updated.end_time.saturating_sub(now));
+        }
 
         events::resumed(env, caller, now);
         Ok(())
@@ -784,6 +827,7 @@ impl DripStream {
         let mut updated = info.clone();
         updated.end_time = end_time;
         state::save(env, &updated);
+        ttl::bump_for_remaining(env, end_time.saturating_sub(env.ledger().timestamp()));
 
         // Emit topped_up event to indicate funds were deposited
         let new_balance = tk.balance(&contract_addr);
@@ -860,6 +904,7 @@ impl DripStream {
         let mut updated = info.clone();
         updated.end_time = new_end_time;
         state::save(env, &updated);
+        ttl::bump_for_remaining(env, new_end_time.saturating_sub(env.ledger().timestamp()));
 
         let new_balance = tk.balance(&contract_addr);
         events::topped_up_and_extended(
@@ -1084,7 +1129,13 @@ impl DripStream {
             tk.transfer(&contract_addr, &info.sender, &refund_to_sender);
         }
 
-        events::force_cancelled(env, &info.sender, refund_to_sender, total_withdrawn, refund_to_sender);
+        events::force_cancelled(
+            env,
+            &info.sender,
+            refund_to_sender,
+            total_withdrawn,
+            refund_to_sender,
+        );
         Ok(())
     }
 
@@ -1270,6 +1321,8 @@ impl DripStream {
     /// Read-only: get the configured split configuration, if any.
     pub fn split_recipient(env: Env) -> Option<SplitConfig> {
         env.storage().instance().get(&DataKey::SplitConfig)
+    }
+
     /// Sender updates the stream's title (descriptive name).
     pub fn set_stream_title(env: Env, caller: Address, title: String) -> Result<(), Error> {
         let info = state::load(&env);
@@ -1296,6 +1349,11 @@ impl DripStream {
 
         env.storage().instance().set(&DataKey::ReferenceTag, &tag);
         Ok(())
+    }
+
+    /// Read-only: the optional description supplied at creation (#845).
+    pub fn description(env: Env) -> Option<String> {
+        env.storage().instance().get(&DataKey::StreamDescription)
     }
 
     /// Read-only: the current stream title, if set.
@@ -1540,27 +1598,21 @@ impl DripStream {
     }
 
     /// Configure whether the stream allows sender cancellation (Issue #685).
-    pub fn set_stream_config(
-        env: Env,
-        caller: Address,
-        config: StreamConfig,
-    ) -> Result<(), Error> {
+    pub fn set_stream_config(env: Env, caller: Address, config: StreamConfig) -> Result<(), Error> {
         state::with_guard(&env, |env| {
             ttl::bump(env);
             let info = state::load(env);
             state::assert_not_cancelled(&info)?;
             require_sender_or_operator(env, &caller, &info.sender)?;
-            env.storage().instance().set(&DataKey::StreamConfig, &config);
+            env.storage()
+                .instance()
+                .set(&DataKey::StreamConfig, &config);
             Ok(())
         })
     }
 
     /// Helper to set stream cancelability (Issue #685).
-    pub fn set_cancelable(
-        env: Env,
-        caller: Address,
-        is_cancelable: bool,
-    ) -> Result<(), Error> {
+    pub fn set_cancelable(env: Env, caller: Address, is_cancelable: bool) -> Result<(), Error> {
         Self::set_stream_config(env, caller, StreamConfig { is_cancelable })
     }
 
@@ -1582,4 +1634,3 @@ impl DripStream {
         }
     }
 }
-

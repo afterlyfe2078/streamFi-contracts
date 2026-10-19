@@ -55,6 +55,8 @@ fn deploy_funded_stream<'a>(
         &(now + duration),
         &clawback,
         &2_592_000_u64,
+        &false,
+        &None,
     );
 
     (client, token_addr)
@@ -389,6 +391,8 @@ fn test_mathematical_precision_under_stress() {
         &(now + duration),
         &false,
         &2_592_000_u64,
+        &false,
+        &None,
     );
 
     // Perform many small withdrawals — each must release the guard

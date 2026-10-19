@@ -59,6 +59,8 @@ mod stream_lifecycle {
             &(now + duration),
             &clawback,
             &2_592_000_u64,
+            &false,
+            &None,
         );
 
         (client, token_addr)

@@ -52,6 +52,8 @@ fn deploy_stream_with_clawback<'a>(
         &(now + duration),
         &clawback,
         &2_592_000_u64,
+        &false,
+        &None,
     );
 
     (client, token_addr)

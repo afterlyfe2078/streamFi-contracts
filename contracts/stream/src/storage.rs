@@ -12,6 +12,8 @@ pub const FLAG_PAUSED: u32 = 1;
 pub const FLAG_CLAWBACK_ENABLED: u32 = 1 << 1;
 #[doc(hidden)]
 pub const FLAG_CANCELLED: u32 = 1 << 2;
+#[doc(hidden)]
+pub const FLAG_REGULATED_ASSET: u32 = 1 << 3;
 
 /// Current storage layout version for this contract.
 /// Bump this and add an explicit migration check whenever a future
@@ -76,6 +78,8 @@ pub enum DataKey {
     /// Optional reference tag (e.g. invoice, order, or external ID).
     /// Allows sender to link the stream to external systems.
     ReferenceTag,
+    /// Optional human-readable description set at creation (#845).
+    StreamDescription,
 }
 
 /// Immutable stream configuration stored in instance storage for cheaper reads (Issue #702).
@@ -125,7 +129,6 @@ pub struct StreamConfig {
     pub is_cancelable: bool,
 }
 
-
 /// Operational status of a stream.
 #[contracttype]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -164,6 +167,7 @@ pub struct StreamInfo {
     pub paused_at: u64,
     pub flags: u32,
     pub event_sequence: u64,
+    pub cumulative_fees: i128,
 }
 
 impl StreamInfo {
@@ -182,8 +186,18 @@ impl StreamInfo {
         (self.flags & FLAG_CLAWBACK_ENABLED) != 0
     }
 
+    /// True when the `FLAG_REGULATED_ASSET` bit (0x08) is set in `flags` (Issue #781).
+    pub fn is_regulated_asset(&self) -> bool {
+        (self.flags & FLAG_REGULATED_ASSET) != 0
+    }
+
     /// Mark the stream as cancelled, setting the correct flag bit.
     pub fn mark_cancelled(&mut self) {
         self.flags |= FLAG_CANCELLED;
+    }
+
+    /// Mark the stream as using a regulated asset, setting the correct flag bit (Issue #781).
+    pub fn mark_regulated_asset(&mut self) {
+        self.flags |= FLAG_REGULATED_ASSET;
     }
 }

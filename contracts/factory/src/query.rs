@@ -34,6 +34,7 @@ pub fn paginate(env: &Env, v: Vec<u64>, offset: u32, limit: u32) -> Vec<u64> {
 }
 
 /// Returns a paginated slice of `Address` vector starting at `offset` with at most `limit` elements.
+#[allow(dead_code)]
 pub fn paginate_addresses(env: &Env, v: Vec<Address>, offset: u32, limit: u32) -> Vec<Address> {
     let mut result = Vec::new(env);
     let start = offset as usize;
@@ -44,4 +45,3 @@ pub fn paginate_addresses(env: &Env, v: Vec<Address>, offset: u32, limit: u32) -
     }
     result
 }
-

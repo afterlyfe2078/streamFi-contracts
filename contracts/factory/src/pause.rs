@@ -33,7 +33,7 @@ pub fn is_paused(env: &Env) -> bool {
 /// responsible for verifying caller authorization, checking current pause
 /// state transitions, updating TTL, and emitting public events.
 pub fn set_paused(env: &Env, paused: bool) {
-    drip_common::pause::set_paused(env, &DataKey::Paused, paused);
+    let _ = drip_common::pause::set_paused(env, &DataKey::Paused, paused);
 }
 
 /// The pause gate: `Err(ContractPaused)` while the factory is halted.

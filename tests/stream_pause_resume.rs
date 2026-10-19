@@ -52,6 +52,8 @@ fn deploy_stream<'a>(
         &(now + duration),
         &false,
         &2_592_000_u64,
+        &false,
+        &None,
     );
 
     (client, token_addr)
@@ -301,6 +303,8 @@ fn sender_cannot_clawback_while_paused() {
         &(now + duration),
         &true, // clawback_enabled = true
         &2_592_000_u64,
+        &false,
+        &None,
     );
 
     advance(&env, 100); // Let some time pass

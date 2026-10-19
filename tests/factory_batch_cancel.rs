@@ -60,6 +60,8 @@ mod factory_batch_cancel {
             &(now + duration),
             &false,
             &2_592_000_u64,
+            &false,
+            &None,
         );
 
         (stream_id, token_addr)
@@ -144,7 +146,7 @@ mod factory_batch_cancel {
 
     #[test]
     fn factory_cancel_batch_streams_deduplicates_addresses() {
-        use drip_factory::{DripFactory, DripFactoryClient};
+        use drip_factory::{DripFactory, DripFactoryClient, Error as FactoryError};
 
         let env = base_env();
         let sender = Address::generate(&env);
@@ -164,10 +166,13 @@ mod factory_batch_cancel {
         list.push_back(stream1.clone()); // duplicate of stream1
         list.push_back(stream2.clone()); // duplicate of stream2
 
+        // The current contract rejects duplicate addresses atomically rather
+        // than silently deduplicating (see `DuplicateStreamId`, Issue #787).
         let res = factory.try_cancel_batch_streams(&sender, &list);
-        assert!(res.is_ok(), "cancel_batch_streams should deduplicate without failing: {:?}", res);
+        assert_eq!(res, Err(Ok(FactoryError::DuplicateStreamId)));
 
-        assert!(DripStreamClient::new(&env, &stream1).info().is_cancelled());
-        assert!(DripStreamClient::new(&env, &stream2).info().is_cancelled());
+        // Atomic failure: neither stream was cancelled.
+        assert!(!DripStreamClient::new(&env, &stream1).info().is_cancelled());
+        assert!(!DripStreamClient::new(&env, &stream2).info().is_cancelled());
     }
 }

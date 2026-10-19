@@ -290,6 +290,8 @@ fn deploy_funded_stream_clawback<'a>(
         &(now + duration),
         &clawback_enabled,
         &2_592_000_u64,
+        &false,
+        &None,
     );
     (client, token_addr)
 }

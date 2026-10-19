@@ -14,8 +14,7 @@ pub mod ttl;
 
 // Import `token` as `tok` to avoid shadowing by any `token: Address` parameter.
 use soroban_sdk::{
-    contract, contractimpl, panic_with_error, token as tok, Address, BytesN, Env, IntoVal, Map,
-    Vec,
+    contract, contractimpl, panic_with_error, token as tok, Address, BytesN, Env, IntoVal, Map, Vec,
 };
 
 use drip_common::is_zero_address;
@@ -23,7 +22,8 @@ use drip_common::is_zero_address;
 pub use errors::Error;
 use storage::DataKey;
 pub use storage::{
-    Aggregate, BatchStreamRequest, FactoryStatus, FeeEstimate, StreamInitParams, StreamOperation, StreamPage,
+    Aggregate, BatchStreamRequest, FactoryStatus, FeeEstimate, StreamInitParams, StreamOperation,
+    StreamPage,
 };
 
 /// Maximum number of streams accepted by a single `create_batch_streams`
@@ -105,6 +105,7 @@ impl DripFactory {
         start_time: u64,
         end_time: u64,
         clawback: bool,
+        description: Option<soroban_sdk::String>,
     ) -> Result<u64, Error> {
         // ── Auth ─────────────────────────────────────────────────────────
         sender.require_auth();
@@ -128,6 +129,12 @@ impl DripFactory {
             end_time,
         )?;
 
+        if let Some(ref desc) = description {
+            if desc.len() > drip_stream::MAX_DESCRIPTION_LEN {
+                return Err(Error::DescriptionTooLong);
+            }
+        }
+
         // ── Governor-controlled bounds ──────────────────────────────────────
         let governor: Address = env
             .storage()
@@ -148,6 +155,7 @@ impl DripFactory {
             start_time,
             end_time,
             clawback,
+            description,
         )
     }
 
@@ -178,6 +186,9 @@ impl DripFactory {
         // neither mutate storage nor pay a TTL extension.
         if end_time > 0 && end_time <= start_time {
             return Err(Error::InvalidDuration);
+        }
+        if end_time > 0 && end_time - start_time < drip_stream::MIN_STREAM_DURATION {
+            return Err(Error::DurationTooShort);
         }
         if deposit <= 0 {
             return Err(Error::InvalidDeposit);
@@ -223,6 +234,7 @@ impl DripFactory {
         start_time: u64,
         end_time: u64,
         clawback: bool,
+        description: Option<soroban_sdk::String>,
     ) -> Result<u64, Error> {
         // ── Governor-controlled bounds ──────────────────────────────────────
         governance::enforce_bounds(config, rate_per_sec, start_time, end_time, now)?;
@@ -318,6 +330,8 @@ impl DripFactory {
             end_time.into_val(&env),
             clawback.into_val(&env),
             config.force_cancel_pause_secs.into_val(&env),
+            false.into_val(&env), // is_regulated_asset
+            description.into_val(&env),
         ];
 
         let stream_addr = match deploy::deploy_stream(&env, &wasm_hash, stream_id, init_args) {
@@ -468,6 +482,7 @@ impl DripFactory {
                 cfg.start_time,
                 cfg.end_time,
                 cfg.clawback,
+                None,
             )?;
             let addr: Address = env
                 .storage()
@@ -536,6 +551,7 @@ impl DripFactory {
                 request.start_time,
                 request.end_time,
                 clawback,
+                None,
             )?;
             stream_ids.push_back(stream_id);
         }
@@ -732,14 +748,14 @@ impl DripFactory {
             ttl::EXTEND_TO,
         );
 
-        let mut aggregate: Aggregate = env
-            .storage()
-            .instance()
-            .get(&DataKey::Aggregate)
-            .unwrap_or(Aggregate {
-                total_supply: 0,
-                active_streams: 0,
-            });
+        let mut aggregate: Aggregate =
+            env.storage()
+                .instance()
+                .get(&DataKey::Aggregate)
+                .unwrap_or(Aggregate {
+                    total_supply: 0,
+                    active_streams: 0,
+                });
         aggregate.active_streams = aggregate.active_streams.saturating_sub(1);
         env.storage()
             .instance()
@@ -800,7 +816,6 @@ impl DripFactory {
         Self::get_streams_by_creator(env, creator)
     }
 
-
     /// Paginated list of stream IDs where `recipient` is the beneficiary,
     /// paired with the recipient's total stream count.
     ///
@@ -854,7 +869,7 @@ impl DripFactory {
     }
 
     /// Read-only: returns the number of streams deployed using a specific token (Issue #720).
-    pub fn get_deployed_streams_count_by_token(env: Env, token: Address) -> u64 {
+    pub fn deployed_stream_count_by_token(env: Env, token: Address) -> u64 {
         let key = DataKey::TokenStreamCount(token);
         let count: u64 = env.storage().persistent().get(&key).unwrap_or(0);
         if count > 0 {
@@ -865,9 +880,9 @@ impl DripFactory {
         count
     }
 
-    /// Read-only: alias for get_deployed_streams_count_by_token (Issue #720).
+    /// Read-only: alias for deployed_stream_count_by_token (Issue #720).
     pub fn stream_count_by_token(env: Env, token: Address) -> u64 {
-        Self::get_deployed_streams_count_by_token(env, token)
+        Self::deployed_stream_count_by_token(env, token)
     }
 
     /// Read-only: current protocol fee in basis points.

@@ -36,5 +36,8 @@ pub enum Error {
     StreamNotCancelable = 24,
     /// The stream cannot be created with a zero rate per second.
     ZeroRateStreamNotAllowed = 25,
+    /// A bounded stream is shorter than `MIN_STREAM_DURATION`.
+    StreamDurationTooShort = 26,
+    /// The optional human-readable description exceeds 128 bytes.
+    DescriptionTooLong = 27,
 }
-

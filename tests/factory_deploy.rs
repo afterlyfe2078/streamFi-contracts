@@ -245,6 +245,7 @@ fn create_stream_rejects_zero_stellar_recipient() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidRecipient)));
@@ -273,6 +274,7 @@ fn create_stream_rejects_zero_contract_recipient() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidRecipient)));
@@ -296,6 +298,7 @@ fn create_stream_rejects_sender_as_recipient() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidRecipient)));
@@ -323,6 +326,7 @@ fn create_stream_rejects_zero_stellar_token() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidToken)));
@@ -350,6 +354,7 @@ fn create_stream_rejects_zero_contract_token() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidToken)));
@@ -373,6 +378,7 @@ fn create_stream_rejects_zero_deposit() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDeposit)));
 }
@@ -396,6 +402,7 @@ fn create_stream_rejects_negative_deposit() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDeposit)));
 }
@@ -417,6 +424,7 @@ fn create_stream_rejects_zero_rate() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidRate)));
 }
@@ -439,6 +447,7 @@ fn create_stream_rejects_deposit_less_than_one_second() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InsufficientDeposit)));
 }
@@ -463,6 +472,7 @@ fn create_stream_rejects_deposit_short_of_full_duration() {
         &now,
         &(now + 3_600),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InsufficientDeposit)));
 }
@@ -485,6 +495,7 @@ fn create_stream_rejects_start_time_in_past() {
         &(now - 1),
         &(now + 3_600),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::BackdatedStream)));
 }
@@ -507,6 +518,7 @@ fn create_stream_rejects_end_before_start() {
         &(now + 100),
         &(now + 50),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDuration)));
 }
@@ -521,7 +533,7 @@ fn create_stream_rejects_end_equal_to_start() {
     let now = env.ledger().timestamp();
     let start = now + 100;
     let result = client.try_create_stream(
-        &sender, &recip, &token, &100_000, &100, &start, &start, &false,
+        &sender, &recip, &token, &100_000, &100, &start, &start, &false, &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDuration)));
 }
@@ -536,7 +548,7 @@ fn test_create_stream_zero_duration_reverts() {
     let now = env.ledger().timestamp();
     let start = now + 100;
     let result = client.try_create_stream(
-        &sender, &recip, &token, &100_000, &100, &start, &start, &false,
+        &sender, &recip, &token, &100_000, &100, &start, &start, &false, &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDuration)));
 }
@@ -555,7 +567,7 @@ fn create_stream_rejects_rate_above_governor_max() {
     let now = env.ledger().timestamp();
     // rate 1_001 > governor's max_rate_per_second of 1_000
     let result = factory.try_create_stream(
-        &sender, &recip, &token, &1_000_000, &1_001, &now, &0, &false,
+        &sender, &recip, &token, &1_000_000, &1_001, &now, &0, &false, &None,
     );
     assert_eq!(result, Err(Ok(Error::RateExceedsMax)));
 }
@@ -580,6 +592,7 @@ fn create_stream_rejects_duration_below_governor_minimum() {
         &now,
         &(now + 3_600),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::DurationTooShort)));
 }
@@ -604,6 +617,7 @@ fn create_stream_rejects_duration_above_governor_maximum() {
         &now,
         &(now + 10_800),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::DurationExceedsMax)));
 }
@@ -675,6 +689,7 @@ fn create_stream_rejects_reentrant_call_while_locked() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::CreateLocked)));
 }
@@ -702,6 +717,7 @@ fn create_stream_lock_does_not_block_validation_failures() {
         &(now + 100),
         &(now + 3_700),
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDeposit)));
 
@@ -737,6 +753,7 @@ fn enforce_bounds_with_end_time_before_start_time_returns_arithmetic_overflow() 
         &(now + 7_200),
         &(now + 3_600), // end_time < start_time
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDuration)));
 }
@@ -762,6 +779,7 @@ fn enforce_bounds_with_equal_start_and_end_time_returns_arithmetic_overflow() {
         &(now + 7_200),
         &(now + 7_200), // end_time == start_time
         &false,
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::InvalidDuration)));
 }
@@ -852,6 +870,7 @@ fn create_stream_charges_and_routes_protocol_fee() {
         &now,
         &(now + 3_600),
         &false,
+        &None,
     );
 
     let stream_addr = client.stream_address(&(client.stream_count() - 1)).unwrap();
@@ -939,5 +958,8 @@ fn stream_wasm_hash_reports_not_initialized_before_setup() {
     let env = base_env();
     let id = env.register_contract(None, DripFactory);
     let client = DripFactoryClient::new(&env, &id);
-    assert_eq!(client.try_stream_wasm_hash(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_stream_wasm_hash(),
+        Err(Ok(Error::NotInitialized))
+    );
 }

@@ -300,4 +300,3 @@ pub fn stream_completed(env: &Env, recipient: &Address, total_withdrawn: i128) {
         total_withdrawn,
     );
 }
-

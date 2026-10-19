@@ -92,7 +92,11 @@ pub fn streamed_amount(env: &Env, info: &StreamInfo) -> Result<i128, Error> {
 }
 
 /// Calculates linear streamed amount: `rate_per_second * elapsed`, returning `Error::ArithmeticOverflow` on overflow (Issue #681).
+/// Optimized to prevent precision loss by checking for zero cases first (Issue #784).
 pub fn calculate_streamed_amount(rate_per_second: i128, elapsed: u64) -> Result<i128, Error> {
+    if rate_per_second == 0 || elapsed == 0 {
+        return Ok(0);
+    }
     rate_per_second
         .checked_mul(elapsed as i128)
         .ok_or(Error::ArithmeticOverflow)
@@ -128,7 +132,10 @@ mod tests {
     #[test]
     fn test_calculate_streamed_amount_normal_ranges() {
         assert_eq!(calculate_streamed_amount(10, 5).unwrap(), 50);
-        assert_eq!(calculate_streamed_amount(1_000_000, 3600).unwrap(), 3_600_000_000);
+        assert_eq!(
+            calculate_streamed_amount(1_000_000, 3600).unwrap(),
+            3_600_000_000
+        );
     }
 
     #[test]
@@ -144,7 +151,10 @@ mod tests {
 
         // Boundary division: half of i128::MAX
         let half_max = i128::MAX / 2;
-        assert_eq!(calculate_streamed_amount(half_max, 2).unwrap(), half_max * 2);
+        assert_eq!(
+            calculate_streamed_amount(half_max, 2).unwrap(),
+            half_max * 2
+        );
         assert_eq!(
             calculate_streamed_amount(half_max, 3),
             Err(Error::ArithmeticOverflow)
