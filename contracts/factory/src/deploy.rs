@@ -32,6 +32,12 @@ pub fn deploy_stream(
     stream_id: u64,
     init_args: Vec<Val>,
 ) -> Result<Address, Error> {
+    // Validate WASM hash registry prior to instantiation (Issue #788).
+    // Verify that the WASM hash is registered and available before attempting deployment.
+    // This prevents deploying with a stale or invalid hash that would fail mid-transaction.
+    let _ = env.ledger().get_wasm(wasm_hash)
+        .map_err(|_| Error::InvalidWasmHash)?;
+
     // Derive a deterministic salt from the stream ID so each stream gets a
     // unique, reproducible contract address.
     let salt = compute_salt(env, stream_id);

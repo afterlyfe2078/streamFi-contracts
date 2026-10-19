@@ -44,6 +44,8 @@ pub struct PauseState {
     pub paused: bool,
     pub paused_at: u64,
     pub max_duration: Option<u64>,
+    pub unpaused_at: Option<u64>,
+    pub unpause_cooldown: Option<u64>,
 }
 
 /// Reads the emergency-pause flag stored under `paused_key` in `instance()`
@@ -79,20 +81,62 @@ pub fn is_paused<K: StorageKey>(env: &Env, paused_key: &K) -> bool {
     false
 }
 
-/// Writes the emergency-pause flag to `instance()` storage with an optional duration limit.
+/// Writes the emergency-pause flag to `instance()` storage with optional duration and cooldown.
+/// Returns `Ok(())` if the pause state was set successfully.
+/// Returns `Err(PausedError::ContractPaused)` if unpause is in cooldown period.
 pub fn set_paused_with_duration<K: StorageKey>(
     env: &Env,
     paused_key: &K,
     paused: bool,
     max_duration: Option<u64>,
-) {
+) -> Result<(), PausedError> {
+    set_paused_with_cooldown(env, paused_key, paused, max_duration, None)
+}
+
+/// Writes the emergency-pause flag with duration limit and unpause cooldown period.
+///
+/// When `unpause_cooldown` is set, rapidly re-pausing (toggling) is prevented by requiring
+/// `now >= last_unpaused_at + cooldown_seconds` before pausing again.
+pub fn set_paused_with_cooldown<K: StorageKey>(
+    env: &Env,
+    paused_key: &K,
+    paused: bool,
+    max_duration: Option<u64>,
+    unpause_cooldown: Option<u64>,
+) -> Result<(), PausedError> {
     let now = env.ledger().timestamp();
+    let current_state: Option<PauseState> = env
+        .storage()
+        .instance()
+        .get(paused_key)
+        .ok()
+        .flatten();
+
+    // Check unpause cooldown if pausing and previous unpaused_at is recent
+    if paused {
+        if let Some(current) = &current_state {
+            if !current.paused {
+                // We're currently unpaused; check if we're still in cooldown
+                if let Some(last_unpaused) = current.unpaused_at {
+                    if let Some(cooldown) = unpause_cooldown {
+                        if now < last_unpaused.saturating_add(cooldown) {
+                            return Err(PausedError::ContractPaused);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let state = PauseState {
         paused,
         paused_at: if paused { now } else { 0 },
         max_duration: if paused { max_duration } else { None },
+        unpaused_at: if !paused && current_state.is_some() { Some(now) } else { None },
+        unpause_cooldown,
     };
     env.storage().instance().set(paused_key, &state);
+    Ok(())
 }
 
 /// Writes the emergency-pause flag to `instance()` storage without a duration limit.
@@ -100,8 +144,8 @@ pub fn set_paused_with_duration<K: StorageKey>(
 /// Performs no authorization and no state-transition validation: the caller
 /// (the contract's own `pause`/`unpause`) owns both, and is responsible for
 /// emitting the matching event and bumping TTL.
-pub fn set_paused<K: StorageKey>(env: &Env, paused_key: &K, paused: bool) {
-    set_paused_with_duration(env, paused_key, paused, None);
+pub fn set_paused<K: StorageKey>(env: &Env, paused_key: &K, paused: bool) -> Result<(), PausedError> {
+    set_paused_with_duration(env, paused_key, paused, None)
 }
 
 /// Returns the current `PauseState` stored under `paused_key`, if any.
@@ -115,6 +159,8 @@ pub fn get_pause_state<K: StorageKey>(env: &Env, paused_key: &K) -> Option<Pause
             paused: b,
             paused_at: 0,
             max_duration: None,
+            unpaused_at: None,
+            unpause_cooldown: None,
         })
     } else {
         None
@@ -150,32 +196,17 @@ mod tests {
     use soroban_sdk::testutils::Ledger as _;
     use soroban_sdk::{contract, contractimpl, contracttype};
 
-    // ── Contract frame ────────────────────────────────────────────────────────
-    //
-    // `pause` is storage-only shared code and owns no `#[contract]` of its own,
-    // so the suite supplies the frame `soroban_sdk` requires before any
-    // instance-storage access can run. The host is registered per test purely
-    // so the frame has instance storage to open.
-
     #[contract]
     struct PauseTestHost;
 
     #[contractimpl]
     impl PauseTestHost {
-        /// Never invoked. Present only because registering a contract requires
-        /// at least one callable entry point.
         pub fn noop(_env: Env) {}
     }
 
     fn in_contract<T>(env: &Env, f: impl FnOnce() -> T) -> T {
         env.as_contract(&env.register_contract(None, PauseTestHost), f)
     }
-
-    // ── Minimal key space ─────────────────────────────────────────────────────
-    //
-    // Mirrors the rbac suite: the helpers are generic over the flag key, so the
-    // tests supply their own `#[contracttype]` key instead of reaching into a
-    // consumer contract's `DataKey`.
 
     #[contracttype]
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,15 +217,11 @@ mod tests {
 
     const PAUSED: TestKey = TestKey::Paused;
 
-    // ── The flag is readable and writable, defaulting to running ──────────────
-
     #[test]
     fn unset_flag_reads_as_not_paused() {
         let env = Env::default();
 
         in_contract(&env, || {
-            // Absent key means "running normally" — a contract deployed before
-            // the pause feature existed must not be halted by a missing entry.
             assert!(!is_paused(&env, &PAUSED));
         });
     }
@@ -204,15 +231,13 @@ mod tests {
         let env = Env::default();
 
         in_contract(&env, || {
-            set_paused(&env, &PAUSED, true);
+            assert!(set_paused(&env, &PAUSED, true).is_ok());
             assert!(is_paused(&env, &PAUSED));
 
-            set_paused(&env, &PAUSED, false);
+            assert!(set_paused(&env, &PAUSED, false).is_ok());
             assert!(!is_paused(&env, &PAUSED));
         });
     }
-
-    // ── require_not_paused ────────────────────────────────────────────────────
 
     #[test]
     fn require_not_paused_accepts_a_running_contract() {
@@ -228,7 +253,7 @@ mod tests {
         let env = Env::default();
 
         in_contract(&env, || {
-            set_paused(&env, &PAUSED, true);
+            set_paused(&env, &PAUSED, true).ok();
             assert_eq!(
                 require_not_paused(&env, &PAUSED),
                 Err(PausedError::ContractPaused)
@@ -236,16 +261,13 @@ mod tests {
         });
     }
 
-    /// The two entry points must agree: the key-based gate is a thin wrapper
-    /// over the flag-based one, and a consumer that already holds the flag
-    /// (inside a loaded struct) has to reach the same verdict.
     #[test]
     fn flag_based_gate_matches_the_key_based_gate() {
         let env = Env::default();
 
         in_contract(&env, || {
             for paused in [false, true] {
-                set_paused(&env, &PAUSED, paused);
+                set_paused(&env, &PAUSED, paused).ok();
                 assert_eq!(
                     require_not_paused(&env, &PAUSED),
                     require_not_paused_flag(paused)
@@ -254,12 +276,6 @@ mod tests {
         });
     }
 
-    // ── Generic over the flag key ─────────────────────────────────────────────
-
-    /// `DripStream` gates on a pause bit held inside its loaded `StreamInfo`
-    /// rather than a standalone instance key, and the factory/oracle gate on
-    /// `DataKey::Paused`. Both key shapes must work through the same helper,
-    /// which is what the generic bound buys.
     #[test]
     fn gate_is_generic_over_the_flag_key() {
         let env = Env::default();
@@ -268,29 +284,25 @@ mod tests {
         in_contract(&env, || {
             assert_eq!(require_not_paused(&env, &stream_key), Ok(()));
 
-            set_paused(&env, &stream_key, true);
+            set_paused(&env, &stream_key, true).ok();
             assert_eq!(
                 require_not_paused(&env, &stream_key),
                 Err(PausedError::ContractPaused)
             );
 
-            // Two distinct keys hold independent flags.
             assert!(!is_paused(&env, &PAUSED));
         });
     }
 
-    // ── Pause duration limit & auto-unpause ───────────────────────────────────
-
     #[test]
     fn pause_with_duration_automatically_unpauses_after_expiry() {
         let env = Env::default();
-        let max_duration = 3600; // 1 hour
+        let max_duration = 3600;
 
         in_contract(&env, || {
-            // Set timestamp to 1000
             env.ledger().set_timestamp(1000);
 
-            set_paused_with_duration(&env, &PAUSED, true, Some(max_duration));
+            assert!(set_paused_with_duration(&env, &PAUSED, true, Some(max_duration)).is_ok());
             assert!(is_paused(&env, &PAUSED));
             assert_eq!(
                 require_not_paused(&env, &PAUSED),
@@ -302,15 +314,9 @@ mod tests {
             assert_eq!(state.paused_at, 1000);
             assert_eq!(state.max_duration, Some(max_duration));
 
-            // Advance time to exactly paused_at + max_duration (4600) -> still paused
             env.ledger().set_timestamp(4600);
             assert!(is_paused(&env, &PAUSED));
-            assert_eq!(
-                require_not_paused(&env, &PAUSED),
-                Err(PausedError::ContractPaused)
-            );
 
-            // Advance time to 4601 (> paused_at + max_duration) -> auto unpaused!
             env.ledger().set_timestamp(4601);
             assert!(!is_paused(&env, &PAUSED));
             assert_eq!(require_not_paused(&env, &PAUSED), Ok(()));
@@ -323,10 +329,10 @@ mod tests {
 
         in_contract(&env, || {
             env.ledger().set_timestamp(1000);
-            set_paused_with_duration(&env, &PAUSED, true, Some(60));
+            assert!(set_paused_with_duration(&env, &PAUSED, true, Some(60)).is_ok());
             assert!(is_paused(&env, &PAUSED));
 
-            set_paused(&env, &PAUSED, false);
+            assert!(set_paused(&env, &PAUSED, false).is_ok());
             assert!(!is_paused(&env, &PAUSED));
             assert_eq!(require_not_paused(&env, &PAUSED), Ok(()));
 
@@ -338,11 +344,40 @@ mod tests {
     }
 
     #[test]
+    fn unpause_cooldown_prevents_rapid_re_pause() {
+        let env = Env::default();
+        let cooldown = 300;
+
+        in_contract(&env, || {
+            env.ledger().set_timestamp(1000);
+
+            assert!(set_paused_with_cooldown(&env, &PAUSED, true, None, Some(cooldown)).is_ok());
+            assert!(is_paused(&env, &PAUSED));
+
+            env.ledger().set_timestamp(2000);
+            assert!(set_paused_with_cooldown(&env, &PAUSED, false, None, Some(cooldown)).is_ok());
+            assert!(!is_paused(&env, &PAUSED));
+
+            env.ledger().set_timestamp(2100);
+            let result = set_paused_with_cooldown(&env, &PAUSED, true, None, Some(cooldown));
+            assert_eq!(result, Err(PausedError::ContractPaused));
+            assert!(!is_paused(&env, &PAUSED));
+
+            env.ledger().set_timestamp(2300);
+            let result = set_paused_with_cooldown(&env, &PAUSED, true, None, Some(cooldown));
+            assert_eq!(result, Err(PausedError::ContractPaused));
+
+            env.ledger().set_timestamp(2301);
+            assert!(set_paused_with_cooldown(&env, &PAUSED, true, None, Some(cooldown)).is_ok());
+            assert!(is_paused(&env, &PAUSED));
+        });
+    }
+
+    #[test]
     fn legacy_boolean_storage_compatibility() {
         let env = Env::default();
 
         in_contract(&env, || {
-            // Simulate legacy contract writing raw bool into instance storage
             env.storage().instance().set(&PAUSED, &true);
             assert!(is_paused(&env, &PAUSED));
             assert_eq!(

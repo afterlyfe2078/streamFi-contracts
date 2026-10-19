@@ -46,5 +46,7 @@ pub enum Error {
     ExcessivePriceDeviation = 14,
     /// Price deviation exceeded (Issue #680).
     PriceDeviationExceeded = 15,
+    /// Timestamp exceeds the configured heartbeat interval for the asset.
+    OraclePriceStale = 16,
 }
 

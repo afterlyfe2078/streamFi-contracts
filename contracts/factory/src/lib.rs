@@ -604,20 +604,19 @@ impl DripFactory {
             return Err(Error::BatchTooLarge);
         }
 
-        // Deduplicate addresses to prevent attempting multiple cancels on the same stream.
-        // Issue #416, #627: If a duplicated address is passed, the first cancel succeeds
-        // and sets FLAG_CANCELLED; the second cancel on the now-cancelled stream would
-        // return Error::StreamCancelled, which the non-try_ variant turns into a panic.
-        // Deduplicating the list ensures each unique stream is cancelled exactly once.
-        // Uses a Map-backed set (O(log n) lookup/insert) rather than an O(n²) nested loop scan.
+        // Validate that no duplicate stream IDs are present in the batch (Issue #787).
+        // Check for duplicates using a Map-backed set (O(log n) lookup/insert).
         let mut seen = Map::new(&env);
-        let mut unique_addresses: Vec<Address> = Vec::new(&env);
         for stream_addr in stream_addresses.iter() {
-            if !seen.contains_key(stream_addr.clone()) {
-                seen.set(stream_addr.clone(), ());
-                unique_addresses.push_back(stream_addr);
+            if seen.contains_key(stream_addr.clone()) {
+                return Err(Error::DuplicateStreamId);
             }
+            seen.set(stream_addr.clone(), ());
         }
+
+        // Process cancellations for all unique stream addresses.
+        // Issue #416, #627: The validation above ensures each address appears exactly once.
+        let unique_addresses = stream_addresses;
 
         for stream_addr in unique_addresses.iter() {
             let stream_client = drip_stream::DripStreamClient::new(&env, &stream_addr);

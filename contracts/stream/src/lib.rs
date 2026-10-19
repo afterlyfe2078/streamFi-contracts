@@ -432,7 +432,7 @@ impl DripStream {
             tk.transfer(&contract_addr, &info.sender, &refund_to_sender);
         }
 
-        events::cancelled(env, &info.sender, refund_to_sender, total_withdrawn);
+        events::cancelled(env, &info.sender, refund_to_sender, total_withdrawn, refund_to_sender);
         Ok(())
     }
 
@@ -1084,7 +1084,7 @@ impl DripStream {
             tk.transfer(&contract_addr, &info.sender, &refund_to_sender);
         }
 
-        events::force_cancelled(env, &info.sender, refund_to_sender, total_withdrawn);
+        events::force_cancelled(env, &info.sender, refund_to_sender, total_withdrawn, refund_to_sender);
         Ok(())
     }
 

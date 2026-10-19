@@ -63,7 +63,9 @@ pub enum Error {
     InvalidGovernor = 31,
     /// The salt used for deploying the stream contract has already been used.
     SaltAlreadyUsed = 32,
+    /// `cancel_batch_streams` was called with duplicate stream addresses (Issue #787).
+    DuplicateStreamId = 33,
     /// Invalid factory initialization parameters (Issue #770).
     /// Indicates misconfigured factory setup (e.g., invalid fee recipient, bounds).
-    InvalidFactoryConfiguration = 20,
+    InvalidFactoryConfiguration = 34,
 }

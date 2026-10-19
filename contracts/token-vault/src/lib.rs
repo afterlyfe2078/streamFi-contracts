@@ -175,7 +175,8 @@ fn withdraw_payouts(
             expected_balance = expected_balance
                 .checked_sub(amount)
                 .ok_or(Error::ArithmeticOverflow)?;
-            tk.transfer(&env.current_contract_address(), &to, &amount);
+            tk.transfer(&env.current_contract_address(), &to, &amount)
+                .map_err(|_| Error::WithdrawTransferFailed)?;
             let new_balance = vault_balance(env)?;
             if new_balance != expected_balance {
                 return Err(Error::WithdrawTransferFailed);
@@ -252,7 +253,8 @@ impl TokenVault {
             }
 
             let tk = token_client(&env)?;
-            tk.transfer(&from, &env.current_contract_address(), &amount);
+            tk.transfer(&from, &env.current_contract_address(), &amount)
+                .map_err(|_| Error::DepositTransferFailed)?;
             let new_balance = tk.balance(&env.current_contract_address());
             if new_balance > max {
                 return Err(Error::LimitExceeded);
@@ -330,7 +332,8 @@ impl TokenVault {
             let contract_addr = env.current_contract_address();
 
             for deposit in deposits.iter() {
-                tk.transfer(&deposit.from, &contract_addr, &deposit.amount);
+                tk.transfer(&deposit.from, &contract_addr, &deposit.amount)
+                    .map_err(|_| Error::DepositTransferFailed)?;
                 let current_balance = tk.balance(&contract_addr);
                 events::deposited(&env, &deposit.from, deposit.amount, current_balance);
             }
@@ -729,7 +732,8 @@ impl TokenVault {
             }
 
             let tk = token::Client::new(&env, &token);
-            tk.transfer(&from, &env.current_contract_address(), &amount);
+            tk.transfer(&from, &env.current_contract_address(), &amount)
+                .map_err(|_| Error::DepositTransferFailed)?;
 
             let current_acc_balance = get_token_account_balance(&env, &token, &from);
             let new_acc_balance = current_acc_balance
@@ -776,7 +780,8 @@ impl TokenVault {
                 return Err(Error::LimitExceeded);
             }
 
-            tk.transfer(&env.current_contract_address(), &to, &amount);
+            tk.transfer(&env.current_contract_address(), &to, &amount)
+                .map_err(|_| Error::WithdrawTransferFailed)?;
 
             if current_acc_balance >= amount {
                 set_token_account_balance(&env, &token, &caller, current_acc_balance - amount);

@@ -46,7 +46,19 @@
 //! `AdminCount`). If future growth makes the list unbounded, migrate to
 //! `persistent()` with explicit TTL management.
 
-use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val, Vec as SorobanVec};
+use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val, Vec as SorobanVec, symbol_short};
+
+// ── Events ─────────────────────────────────────────────────────────────────
+
+/// Emitted when a role is revoked from an account.
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoleRevokedEvent {
+    pub account: Address,
+    pub role: String,
+    pub revoked_by: Option<Address>,
+    pub revoked_at: u64,
+}
 
 // ── Trait alias helpers ────────────────────────────────────────────────────
 
@@ -179,28 +191,33 @@ where
     grant_with_expiration(env, role_key, admin_count_key, members_key, is_admin, account, None)
 }
 
-/// Revokes the role identified by `role_key` from an account.
+/// Revokes the role identified by `role_key` from an account with event logging.
 ///
 /// - `role_key`:        composite `(role, account)` key
 /// - `admin_count_key`: key for the admin counter (decremented when `is_admin == true`)
 /// - `members_key`:     key for the `Vec<Address>` membership index
 /// - `is_admin`:        `true` when the role being revoked is `Admin`
 /// - `account`:         the address whose role is being revoked
+/// - `revoked_by`:      optional address that performed the revocation (for event logging)
+/// - `role_name`:       role name for event logging
 ///
 /// Idempotent: revoking a role not held returns `Ok(false)`.
 /// Refuses to revoke the last Admin (`Err(RbacError::LastAdmin)`).
 /// Returns `Ok(true)` when the role was actually removed.
+/// Emits `RoleRevokedEvent` when a role is successfully revoked.
 ///
 /// **Note:** Oracle-specific side-effects (e.g. removing a `PriceFeeder`
 /// from the submitters set) belong at the call site, gated on the
 /// `Ok(true)` return value.
-pub fn revoke<RK, AK, MK>(
+pub fn revoke_with_event<RK, AK, MK>(
     env: &Env,
     role_key: &RK,
     admin_count_key: &AK,
     members_key: &MK,
     is_admin: bool,
     account: &Address,
+    revoked_by: Option<&Address>,
+    role_name: &str,
 ) -> Result<bool, RbacError>
 where
     RK: StorageKey,
@@ -232,7 +249,36 @@ where
         }
     }
     env.storage().instance().set(members_key, &updated);
+
+    // Emit role revocation event
+    let event = RoleRevokedEvent {
+        account: account.clone(),
+        role: role_name.to_string(),
+        revoked_by: revoked_by.cloned(),
+        revoked_at: env.ledger().timestamp(),
+    };
+    env.events().publish(("rbac", symbol_short!("revoked")), event);
+
     Ok(true)
+}
+
+/// Revokes the role identified by `role_key` from an account.
+///
+/// Backward-compatible wrapper around `revoke_with_event` that doesn't emit events.
+pub fn revoke<RK, AK, MK>(
+    env: &Env,
+    role_key: &RK,
+    admin_count_key: &AK,
+    members_key: &MK,
+    is_admin: bool,
+    account: &Address,
+) -> Result<bool, RbacError>
+where
+    RK: StorageKey,
+    AK: StorageKey,
+    MK: StorageKey,
+{
+    revoke_with_event(env, role_key, admin_count_key, members_key, is_admin, account, None, "")
 }
 
 /// Returns every account currently holding a role.
@@ -846,6 +892,60 @@ mod tests {
                 Ok(())
             );
             assert!(success_recorded(&env));
+        });
+    }
+
+    // ── multi-admin guards ────────────────────────────────────────────────────
+
+    #[test]
+    fn multi_admin_prevents_revocation_of_last_admin() {
+        let env = Env::default();
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admin3 = Address::generate(&env);
+
+        in_contract(&env, || {
+            grant_role(&env, TestRole::Admin, &admin1, true);
+            grant_role(&env, TestRole::Admin, &admin2, true);
+            grant_role(&env, TestRole::Admin, &admin3, true);
+            assert_eq!(admin_count(&env, &ADMIN_COUNT), 3);
+
+            // Can revoke admin2 and admin3 since admin1 remains
+            assert_eq!(revoke_role(&env, TestRole::Admin, &admin2, true), Ok(true));
+            assert_eq!(admin_count(&env, &ADMIN_COUNT), 2);
+            assert_eq!(revoke_role(&env, TestRole::Admin, &admin3, true), Ok(true));
+            assert_eq!(admin_count(&env, &ADMIN_COUNT), 1);
+
+            // Cannot revoke the final admin
+            assert_eq!(
+                revoke_role(&env, TestRole::Admin, &admin1, true),
+                Err(RbacError::LastAdmin)
+            );
+            assert_eq!(admin_count(&env, &ADMIN_COUNT), 1);
+            assert!(has_role(&env, &role_key(TestRole::Admin, &admin1)));
+        });
+    }
+
+    #[test]
+    fn multi_admin_guards_preserve_members_list() {
+        let env = Env::default();
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admin3 = Address::generate(&env);
+
+        in_contract(&env, || {
+            grant_role(&env, TestRole::Admin, &admin1, true);
+            grant_role(&env, TestRole::Admin, &admin2, true);
+            grant_role(&env, TestRole::Admin, &admin3, true);
+
+            // Revoke middle admin
+            revoke_role(&env, TestRole::Admin, &admin2, true);
+
+            // Members list should still contain admin1 and admin3
+            let members = role_members(&env, &members_key(&TestRole::Admin));
+            assert_eq!(members.len(), 2);
+            assert_eq!(members.get(0).unwrap(), admin1);
+            assert_eq!(members.get(1).unwrap(), admin3);
         });
     }
 }

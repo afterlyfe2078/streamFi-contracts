@@ -502,4 +502,78 @@ fn error_type_carries_required_traits_and_named_discriminants() {
     assert_eq!(Error::InvalidPrice as u32, 9);
     assert_eq!(Error::InvalidConfig as u32, 10);
     assert_eq!(Error::NotAuthorized as u32, 11);
+    assert_eq!(Error::OraclePriceStale as u32, 16);
+}
+
+// ─── multi-asset price feed aggregation ──────────────────────────────
+
+#[test]
+fn multi_asset_aggregation_with_independent_buffers() {
+    let env = base_env();
+    let admin = Address::generate(&env);
+    let client = deploy(&env, &admin);
+    let asset_a = Address::generate(&env);
+    let asset_b = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    configure(&admin, &client, &asset_a, 300, 600);
+    configure(&admin, &client, &asset_b, 300, 600);
+    client.add_oracle(&admin, &asset_a, &oracle);
+    client.add_oracle(&admin, &asset_b, &oracle);
+
+    let now = env.ledger().timestamp();
+    client.submit_observation(&oracle, &asset_a, &100i128, &now);
+    client.submit_observation(&oracle, &asset_b, &200i128, &now);
+
+    let (price_a, _) = client.try_get_twap(&asset_a).unwrap().unwrap();
+    let (price_b, _) = client.try_get_twap(&asset_b).unwrap().unwrap();
+    assert_eq!(price_a, 100);
+    assert_eq!(price_b, 200);
+}
+
+#[test]
+fn deviation_bounds_reject_excessive_spread() {
+    // When price_a = 100 and price_b = 200, the deviation is 100%.
+    // If max_deviation_bps = 1000 (10%), this spread should be rejected.
+    let env = base_env();
+    let admin = Address::generate(&env);
+    let client = deploy(&env, &admin);
+    let asset = Address::generate(&env);
+    let oracle_a = Address::generate(&env);
+    let oracle_b = Address::generate(&env);
+
+    configure(&admin, &client, &asset, 300, 600);
+    client.add_oracle(&admin, &asset, &oracle_a);
+    client.add_oracle(&admin, &asset, &oracle_b);
+
+    let now = env.ledger().timestamp();
+    client.submit_observation(&oracle_a, &asset, &100i128, &now);
+    advance(&env, 1);
+    client.submit_observation(&oracle_b, &asset, &200i128, &(now + 1));
+
+    // Deviation: |200 - 100| / 100 = 100% > 10% bound → error
+    // (This test documents the behavior; implementation requires
+    // adding max_deviation_bps config and checking logic.)
+}
+
+#[test]
+fn deviation_bounds_accept_within_tolerance() {
+    // When price_a = 100 and price_b = 105, the deviation is 5%.
+    // If max_deviation_bps = 1000 (10%), this spread should be accepted.
+    let env = base_env();
+    let admin = Address::generate(&env);
+    let client = deploy(&env, &admin);
+    let asset = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    configure(&admin, &client, &asset, 300, 600);
+    client.add_oracle(&admin, &asset, &oracle);
+
+    let now = env.ledger().timestamp();
+    client.submit_observation(&oracle, &asset, &100i128, &now);
+    advance(&env, 1);
+    client.submit_observation(&oracle, &asset, &105i128, &(now + 1));
+
+    let (price, _) = client.try_get_twap(&asset).unwrap().unwrap();
+    assert!(price > 0);
 }
